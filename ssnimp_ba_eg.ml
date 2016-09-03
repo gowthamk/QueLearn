@@ -13,6 +13,7 @@ open Z3.Arithmetic
 open Z3.Arithmetic.Integer
 open Z3.Quantifier
 module Solver = Z3.Solver
+module OptSolver = Z3.Optimize
 module Model = Z3.Model
 module Symbol = Z3.Symbol
 module Optimize = Z3.Optimize
@@ -36,7 +37,6 @@ let _ =
     Printf.printf "Running Z3 version %s\n" Version.to_string ;
     let cfg = [("model", "true"); ("proof", "false")] in
     let ctx = (mk_context cfg) in
-    let solver = mk_solver ctx None in 
     let sym = Symbol.mk_string ctx in
     let nullary_const cons = mk_app ctx 
                    (Constructor.get_constructor_decl cons) [] in
@@ -75,7 +75,6 @@ let _ =
     let asn1 = mk_forall ctx typs names body None [] [] None None in
     let _ = Printf.printf "Quantifier asn1: %s\n" 
               (Quantifier.to_string asn1) in
-    let _ = Solver.add solver [expr_of_quantifier asn1] in
     (* (declare-fun vis (Eff Eff) Bool) *)
     let s_vis = mk_func_decl_s ctx "vis" [s_Eff; s_Eff] s_Bool in
     (* (assert (forall ((e Eff)) (not (vis e e)))) *)
@@ -83,21 +82,19 @@ let _ =
     let asn2 = mk_forall ctx typs names body None [] [] None None in
     let _ = Printf.printf "Quantifier asn2: %s\n" 
               (Quantifier.to_string asn2) in
-    let _ = Solver.add solver [expr_of_quantifier asn2] in
     (* (declare-const a1 Int) (declare-const a2 Int) *)
     let s_a1 = Int.mk_const ctx @@ sym "a1" in
     let s_a2 = Int.mk_const ctx @@ sym "a2" in
     (* (assert (>= a1 0)) (assert (>= a2 0)) *)
     let asn3 = mk_ge ctx s_a1 s_0 in
     let asn4 = mk_ge ctx s_a2 s_0 in
-    let _ = Solver.add solver [asn3; asn4] in
     (* (define-fun sel ((a Eff)(n Eff)) Int
         (if (and (vis a n) (= (oper a) DP)) (rval a) 
           (if (and (vis a n) (= (oper a) WD)) (- 0 (rval a)) 0))) *)
     let s_sel = mk_func_decl_s ctx "sel" [s_Eff; s_Eff] s_Int in
     let typs = [s_Eff; s_Eff] in
     let names = [sym "a"; sym "n"] in
-    let vars = [mk_bound ctx 0 s_Eff; mk_bound ctx 1 s_Eff] in 
+    let vars = [mk_bound ctx 1 s_Eff; mk_bound ctx 0 s_Eff] in 
     let visan = mk_app ctx s_vis vars in
     let opera = mk_app ctx s_oper [hd vars] in
     let rvala = mk_app ctx s_rval [hd vars] in
@@ -110,10 +107,91 @@ let _ =
     let lhs = mk_app ctx s_sel vars in
     let body = mk_eq ctx lhs rhs in
     let asn5 = mk_forall ctx typs names body None [] [] None None in
-    let _ = Solver.add solver [expr_of_quantifier asn5] in
-    let model = match check solver []  with
-      | SATISFIABLE -> fromJust (get_model solver)
+    let _ = Printf.printf "Quantifier asn5: %s\n" 
+              (Quantifier.to_string asn5) in
+    (* (define-fun getBalance ((n Eff)) Int
+          (+ (sel e1 n) (sel e2 n) (sel e3 n) (sel e4 n) (sel e5 n))) *)
+    let s_getBalance = mk_func_decl_s ctx "getBalance" [s_Eff] s_Int in
+    let typs = [s_Eff] in
+    let names = [sym "n"] in
+    let vars = [mk_bound ctx 0 s_Eff] in 
+    let sele1n = mk_app ctx s_sel [nullary_const s_e1; hd vars] in
+    let sele2n = mk_app ctx s_sel [nullary_const s_e2; hd vars] in
+    let sele3n = mk_app ctx s_sel [nullary_const s_e3; hd vars] in
+    let sele4n = mk_app ctx s_sel [nullary_const s_e4; hd vars] in
+    let sele5n = mk_app ctx s_sel [nullary_const s_e5; hd vars] in
+    let rhs = mk_add ctx [sele1n; sele2n; sele3n; sele4n; sele5n] in
+    let lhs = mk_app ctx s_getBalance vars in
+    let body = mk_eq ctx lhs rhs in
+    let asn6 = mk_forall ctx typs names body None [] [] None None in
+    let _ = Printf.printf "Quantifier asn6: %s\n" 
+              (Quantifier.to_string asn6) in
+    (* (assert (= (oper e3) GB)) (assert (= (rval e3) (getBalance e3))) *)
+    let opere3 = mk_app ctx s_oper [nullary_const s_e3] in
+    let asn7 = mk_eq ctx opere3 @@ nullary_const s_GB in
+    let rvale3 = mk_app ctx s_rval [nullary_const s_e3] in
+    let asn8 = mk_eq ctx rvale3 @@ mk_app ctx s_getBalance 
+                                     [nullary_const s_e3] in
+    (* (assert (if (>= (getBalance e4) a1) 
+                  (and (= (oper e4) WD) (= (rval e4) a1)) 
+                  (and (= (oper e4) NOP))))*)
+    let grd = mk_ge ctx (mk_app ctx s_getBalance 
+                           [nullary_const s_e4]) s_a1 in
+    let opere4 = mk_app ctx s_oper [nullary_const s_e4] in
+    let rvale4 = mk_app ctx s_rval [nullary_const s_e4] in
+    let thene = mk_and ctx [mk_eq ctx opere4 @@ nullary_const s_WD;
+                            mk_eq ctx rvale4 s_a1] in
+    let elsee = mk_eq ctx opere4 @@ nullary_const s_NOP in
+    let asn9 = mk_ite ctx grd thene elsee in
+    (* (assert (if (>= (getBalance e5) a2) 
+                  (and (= (oper e5) WD) (= (rval e5) a2)) 
+                  (and (= (oper e5) NOP))))*)
+    let grd = mk_ge ctx (mk_app ctx s_getBalance 
+                           [nullary_const s_e5]) s_a2 in
+    let opere5 = mk_app ctx s_oper [nullary_const s_e5] in
+    let rvale5 = mk_app ctx s_rval [nullary_const s_e5] in
+    let thene = mk_and ctx [mk_eq ctx opere5 @@ nullary_const s_WD;
+                            mk_eq ctx rvale5 s_a2] in
+    let elsee = mk_eq ctx opere5 @@ nullary_const s_NOP in
+    let asn10 = mk_ite ctx grd thene elsee in
+    (* (assert (>= (+ (sel e1 e3) (sel e2 e3)) 0))*)
+    let sele1e3 = mk_app ctx s_sel [nullary_const s_e1; 
+                                    nullary_const s_e3] in
+    let sele2e3 = mk_app ctx s_sel [nullary_const s_e2; 
+                                    nullary_const s_e3] in
+    let asn11 = mk_ge ctx (mk_add ctx [sele1e3; sele2e3]) s_0 in
+    (* (declare-const inv Bool) (assert (= inv (>= (rval e3) 0))) *)
+    let s_inv = Boolean.mk_const ctx @@ sym "inv" in
+    let asn12 = mk_eq ctx s_inv @@ mk_ge ctx rvale3 s_0 in
+    (* assert soft constraints *)
+    let opt_solver = mk_opt ctx in
+    let _ = OptSolver.add opt_solver [expr_of_quantifier asn1; 
+                                   expr_of_quantifier asn2; 
+                                   asn3; asn4; 
+                                   expr_of_quantifier asn5; 
+                                   expr_of_quantifier asn6;
+                                   asn7; asn8; asn9; asn10; 
+                                   asn11; asn12] in
+    let e_consts = Array.of_list @@ List.map nullary_const 
+                                      [s_e1; s_e2; s_e3; s_e4; s_e5] in
+    let _ = 
+      for i = 0 to 4 do
+        for j = 0 to 4 do
+          let str = "soft"^(string_of_int @@ i+1)^(string_of_int @@ j+1) in
+          let visee = mk_app ctx s_vis [e_consts.(i); e_consts.(j)] in
+          let soft_asn = mk_not ctx visee in
+            ignore @@ OptSolver.add_soft opt_solver soft_asn "1" @@ sym str
+        done
+      done in
+    let _ = OptSolver.push opt_solver in 
+    (* (assert (not inv)) *)
+    let neg_inv_asn = mk_not ctx s_inv in
+    let _ = OptSolver.add opt_solver [neg_inv_asn] in
+    let _ = Printf.printf "Opt Ctx:\n %s \n" @@ OptSolver.to_string opt_solver in
+    let model = match OptSolver.check opt_solver with
+      | SATISFIABLE -> fromJust (OptSolver.get_model opt_solver)
       | _ -> failwith "Unsat!" in
+    let _ = OptSolver.pop opt_solver in
     Printf.printf "Model: \n%s\n" (Model.to_string model);
     Printf.printf "Disposing...\n";
     Gc.full_major ())
