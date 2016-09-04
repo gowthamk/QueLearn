@@ -20,15 +20,41 @@ module Optimize = Z3.Optimize
 module Int = Z3.Arithmetic.Integer
 module Bool = Z3.Boolean
 module Quantifier = Z3.Quantifier
+module Expr = Z3.Expr
 
 let fromJust = function
   | Some x -> x
   | None -> failwith "Got None when Some was expected."
 
+type oper = GB | WD | DP | NOP
+type exec = {opers: oper array; visees: bool array array}
+
 (* Returns [f(i), f(i-1), ... , f(1)]*)
 let rec list_init i f = if i <= 0 then [] else (f i)::(list_init (i-1) f)
 
 let hd = List.hd
+
+let oper_of_expr expr = match Expr.to_string expr with 
+  | "GB" -> GB | "WD" -> WD | "DP" -> DP | "NOP" -> NOP
+  | _ -> failwith "Unexpected Expr.expr"
+
+let string_of_oper = function GB -> "GB" 
+  | WD -> "WD" | DP -> "DP" | NOP -> "NOP"
+
+let print_exec {opers; visees} = 
+  begin
+    for i = 0 to 4 do
+      Printf.printf "%s," (string_of_oper opers.(i)) 
+    done;
+    for i=0 to 4 do
+      for j=0 to 4 do
+        let value = if visees.(i).(j) then "1" else "0" in
+        let sep = if i=4 && j=4 then "" else "," in
+          Printf.printf "%s%s" value sep
+      done
+    done;
+    Printf.printf "\n"
+  end
 
 let _ = 
   if not (Log.open_ "z3.log") then
@@ -166,22 +192,34 @@ let _ =
     (* assert soft constraints *)
     let opt_solver = mk_opt ctx in
     let _ = OptSolver.add opt_solver [expr_of_quantifier asn1; 
-                                   expr_of_quantifier asn2; 
-                                   asn3; asn4; 
-                                   expr_of_quantifier asn5; 
-                                   expr_of_quantifier asn6;
-                                   asn7; asn8; asn9; asn10; 
-                                   asn11; asn12] in
+                                      expr_of_quantifier asn2; 
+                                      asn3; asn4; 
+                                      expr_of_quantifier asn5; 
+                                      expr_of_quantifier asn6;
+                                      asn7; asn8; asn9; asn10; 
+                                      asn11; asn12] in
     let e_consts = Array.of_list @@ List.map nullary_const 
                                       [s_e1; s_e2; s_e3; s_e4; s_e5] in
+    let visees = Array.make 5 @@ Array.make 5 s_true in
     let _ = 
       for i = 0 to 4 do
         for j = 0 to 4 do
           let str = "soft"^(string_of_int @@ i+1)^(string_of_int @@ j+1) in
           let visee = mk_app ctx s_vis [e_consts.(i); e_consts.(j)] in
+          let _ = visees.(i).(j) <- visee in
+          let _ = Printf.printf "visees[%d,%d] <- %s\n" i j @@
+                  Expr.to_string visees.(i).(j) in
           let soft_asn = mk_not ctx visee in
             ignore @@ OptSolver.add_soft opt_solver soft_asn "1" @@ sym str
         done
+      done in
+    let _ = Printf.printf "visees:\n" in
+    let _ = 
+      for i=0 to 4 do
+        for j=0 to 4 do
+          Printf.printf "%s\t" @@ Expr.to_string visees.(i).(j)
+        done;
+        Printf.printf "\n"
       done in
     let _ = OptSolver.push opt_solver in 
     (* (assert (not inv)) *)
@@ -192,6 +230,33 @@ let _ =
       | SATISFIABLE -> fromJust (OptSolver.get_model opt_solver)
       | _ -> failwith "Unsat!" in
     let _ = OptSolver.pop opt_solver in
-    Printf.printf "Model: \n%s\n" (Model.to_string model);
+    (*Printf.printf "Model: \n%s\n" (Model.to_string model);*)
+    let opere1 = mk_app ctx s_oper [nullary_const s_e1] in
+    let opere2 = mk_app ctx s_oper [nullary_const s_e2] in
+    let opers = Array.of_list [opere1; opere2; opere3; opere4; opere5] in
+    let opers_mod = Array.map 
+                      (fun opere -> oper_of_expr @@ fromJust @@ 
+                                    Model.eval model opere true)
+                      opers in
+    let visees_mod = Array.map 
+                       (fun row -> Array.map 
+                          (fun visee -> is_true @@ fromJust @@
+                               Model.eval model visee true) row) 
+                       visees in
+    let exec = {opers=opers_mod; visees=visees_mod} in 
+    let _ = print_exec exec in 
+    let _ = Printf.printf "oper(e1) = %s\n" @@ Expr.to_string @@ 
+            fromJust @@ Model.eval model opere1 true in
+    let _ = Printf.printf "oper(e2) = %s\n" @@ Expr.to_string @@ 
+            fromJust @@ Model.eval model opere2 true in
+    let _ = Printf.printf "oper(e3) = %s\n" @@ Expr.to_string @@ 
+            fromJust @@ Model.eval model opere3 true in
+    let _ = Printf.printf "oper(e4) = %s\n" @@ Expr.to_string @@ 
+            fromJust @@ Model.eval model opere4 true in
+    let _ = Printf.printf "oper(e5) = %s\n" @@ Expr.to_string @@ 
+            fromJust @@ Model.eval model opere5 true in
+    let _ = Printf.printf "%s = %s\n"  (Expr.to_string visees.(0).(2))
+              (Expr.to_string @@ fromJust @@ 
+               Model.eval model visees.(0).(2) true) in
     Printf.printf "Disposing...\n";
     Gc.full_major ())
