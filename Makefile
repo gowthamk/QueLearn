@@ -8,6 +8,7 @@ OCB_FLAGS = -use-ocamlfind #-tag bin_annot
 OCB = 		ocamlbuild $(OCB_FLAGS)
 
 all: 		native byte 
+		mkdir -p Graphs
 
 clean:
 		$(OCB) -clean

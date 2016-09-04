@@ -35,6 +35,16 @@ struct
       Array.mapi (fun i e1 -> f e1 @@ arr2.(i)) arr1
 end
 
+let mkUidGen idBase =
+  let count = ref 0 in
+    fun () -> 
+      let id = idBase ^ (string_of_int !count) in
+      let _ = count := !count + 1 in
+        id
+let freshDotFileName = 
+  let f = mkUidGen @@ "cex"^(string_of_float @@ Unix.time ()) in
+    fun () -> (f ())^".dot"
+
 let fromJust = function
   | Some x -> x
   | None -> failwith "Got None when Some was expected."
@@ -54,6 +64,72 @@ let oper_of_expr expr = match Expr.to_string expr with
 
 let string_of_oper = function GB -> "GB" 
   | WD -> "WD" | DP -> "DP" | NOP -> "NOP"
+
+
+(* 
+ * Execution graphs
+ *)
+module ExecGraph : 
+sig
+  type t
+  type node = int * oper
+  val create : unit -> t
+  val add_vertex : t -> node -> unit
+  val remove_vertex : t -> node -> unit
+  val add_edge : t -> (node*node) -> unit
+  val fold_edges : (node*node -> 'a -> 'a) -> t -> 'a -> 'a
+  val output_graph : out_channel -> t -> unit
+end= 
+struct
+  type node = int * oper
+  module Vertex = struct
+    type t = node
+    let compare (a1,_) (a2,_) = Pervasives.compare a1 a2
+    let hash = Hashtbl.hash
+    let equal (a1,_) (a2,_) = a1 = a2
+  end 
+  module DiGraph = Graph.Imperative.Digraph.ConcreteBidirectional(Vertex)
+  module Dot = Graph.Graphviz.Dot
+    (struct
+       include DiGraph
+       let edge_attributes _ = []
+       let default_edge_attributes _ = [`Comment "vis"]
+       let get_subgraph _ = None
+       let vertex_attributes _ = []
+       let vertex_name (a,op_tag) = "e"^(string_of_int a)^"_"
+              ^(string_of_oper op_tag)
+       let default_vertex_attributes _ = []
+       let graph_attributes _ = []
+     end)
+  include DiGraph
+  include Dot
+  let create () = create ()
+  let add_edge t (v1,v2) = add_edge t v1 v2
+  let fold_edges f = fold_edges (fun v1 v2 acc -> f (v1,v2) acc)
+end
+
+let graph_of_exec {opers=opers_mod; visees=visees_mod} = 
+  let open ExecGraph in
+  let g = create () in
+  let add_vertex = add_vertex g in
+  let add_edge = add_edge g in
+    begin
+      for i=0 to 4 do
+        for j=0 to 4 do
+          if visees_mod.(i).(j) then
+            begin
+              let node1 = (i+1,opers_mod.(i)) in
+              let node2 = (j+1,opers_mod.(j)) in
+              add_vertex node1;
+              add_vertex node2;
+              add_edge (node1,node2)
+            end
+          else
+            ()
+        done
+      done;
+      g
+    end
 
 let print_exec {opers; visees} = 
   begin
@@ -246,8 +322,8 @@ let _ =
      *)
     let encode_exec ({opers=opers_mod; visees=visees_mod}:exec) : Expr.expr = 
       let oper_eqs = Array.to_list @@ Array.map2 
-                       (fun opere oper_tag -> 
-                          mk_eq ctx opere @@ expr_of_oper oper_tag)
+                       (fun opere op_tag -> 
+                          mk_eq ctx opere @@ expr_of_oper op_tag)
                        opers opers_mod in
       let vis_preds = ref [] in
       let _ =
@@ -266,13 +342,14 @@ let _ =
     (*
      * Main CEGAR loop.
      *)
+    let cexs = ref [] in
     let rec cegar_loop iter = 
-      let _ = if iter >= 100 then raise Return else () in
+      let _ = if iter > 10 then raise Return else () in
       let _ = OptSolver.push opt_solver in 
-      let _ = if iter mod 20 = 0 
+      (* let _ = if iter mod 20 = 0 
               then Printf.printf "Opt Ctx:\n %s \n" @@ 
                     OptSolver.to_string opt_solver 
-              else () in
+              else () in *)
       let model = match OptSolver.check opt_solver with
         | SATISFIABLE -> fromJust (OptSolver.get_model opt_solver)
         | UNSATISFIABLE -> (print_string "UNSAT\n"; raise Return)
@@ -288,15 +365,27 @@ let _ =
                             (fun visee -> is_true @@ fromJust @@
                                  Model.eval model visee true) row) 
                          visees in
-      let exec = {opers=opers_mod; visees=visees_mod} in 
-      let _ = Printf.printf "%d. " iter in
-      let _ = (print_exec exec; flush_all ()) in 
-      let cex = encode_exec exec in
-      let _ = OptSolver.add opt_solver [mk_not ctx cex] in
-        cegar_loop (iter + 1) in
+      let cex = {opers=opers_mod; visees=visees_mod} in 
+        begin
+          cexs:= cex :: !cexs; 
+          Printf.printf "%d. " iter; 
+          print_exec cex; 
+          flush_all ();
+          OptSolver.add opt_solver [mk_not ctx @@ encode_exec cex];
+          cegar_loop (iter + 1);
+        end in
     begin
       try cegar_loop 1 with 
         | Return -> ();
+      List.iter 
+        (fun cex -> 
+           let g = graph_of_exec cex in
+           let fpath = "./Graphs/"^(freshDotFileName()) in
+           let out_channel = open_out_bin fpath in
+           let _ = ExecGraph.output_graph out_channel g in
+           let _ = close_out out_channel in
+             ()) 
+        @@ List.rev !cexs;
       Printf.printf "Disposing...\n";
       Gc.full_major ()
     end)
