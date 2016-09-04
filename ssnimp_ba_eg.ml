@@ -22,12 +22,26 @@ module Bool = Z3.Boolean
 module Quantifier = Z3.Quantifier
 module Expr = Z3.Expr
 
+module Array :
+sig
+  include module type of Array
+  val map2 : ('a -> 'b -> 'c) -> 'a array -> 'b array -> 'c array
+end = 
+struct
+  include Array
+  let map2 f arr1 arr2 = 
+    let _ = if Array.length arr1 = Array.length arr2 then ()
+            else failwith "Array.map2 exception" in
+      Array.mapi (fun i e1 -> f e1 @@ arr2.(i)) arr1
+end
+
 let fromJust = function
   | Some x -> x
   | None -> failwith "Got None when Some was expected."
 
 type oper = GB | WD | DP | NOP
 type exec = {opers: oper array; visees: bool array array}
+exception Return 
 
 (* Returns [f(i), f(i-1), ... , f(1)]*)
 let rec list_init i f = if i <= 0 then [] else (f i)::(list_init (i-1) f)
@@ -76,6 +90,11 @@ let _ =
     let s_DP = mk_constructor_s ctx "DP" (sym "isDP") [] [] [] in
     let s_NOP = mk_constructor_s ctx "NOP" (sym "isNOP") [] [] [] in
     let s_Oper = mk_sort_s ctx "Oper" [s_GB; s_WD; s_DP; s_NOP] in
+    let expr_of_oper = function 
+      | GB -> nullary_const s_GB 
+      | WD -> nullary_const s_WD
+      | DP -> nullary_const s_DP
+      | NOP -> nullary_const s_NOP in
     (* (declare-datatypes () ((Eff e1 e2 e3 e4 e5)))*)
     let s_e1 = mk_constructor_s ctx "e1" (sym "isE1") [] [] [] in
     let s_e2 = mk_constructor_s ctx "e2" (sym "isE2") [] [] [] in
@@ -189,7 +208,9 @@ let _ =
     (* (declare-const inv Bool) (assert (= inv (>= (rval e3) 0))) *)
     let s_inv = Boolean.mk_const ctx @@ sym "inv" in
     let asn12 = mk_eq ctx s_inv @@ mk_ge ctx rvale3 s_0 in
-    (* assert soft constraints *)
+    (* (assert (not inv)) *)
+    let neg_inv_asn = mk_not ctx s_inv in
+    (* Create opt_solver and  assert all hard contraints.*)
     let opt_solver = mk_opt ctx in
     let _ = OptSolver.add opt_solver [expr_of_quantifier asn1; 
                                       expr_of_quantifier asn2; 
@@ -197,7 +218,8 @@ let _ =
                                       expr_of_quantifier asn5; 
                                       expr_of_quantifier asn6;
                                       asn7; asn8; asn9; asn10; 
-                                      asn11; asn12] in
+                                      asn11; asn12;
+                                      neg_inv_asn] in
     let e_consts = Array.of_list @@ List.map nullary_const 
                                       [s_e1; s_e2; s_e3; s_e4; s_e5] in
     let (visees : Expr.expr array array) = Array.mapi 
@@ -209,6 +231,7 @@ let _ =
     let opere1 = mk_app ctx s_oper [nullary_const s_e1] in
     let opere2 = mk_app ctx s_oper [nullary_const s_e2] in
     let opers = Array.of_list [opere1; opere2; opere3; opere4; opere5] in
+    (* assert soft constraints *)
     let _ = 
       for i = 0 to 4 do
         for j = 0 to 4 do
@@ -218,39 +241,63 @@ let _ =
             ignore @@ OptSolver.add_soft opt_solver soft_asn "1" @@ sym str
         done
       done in
-    let _ = OptSolver.push opt_solver in 
-    (* (assert (not inv)) *)
-    let neg_inv_asn = mk_not ctx s_inv in
-    let _ = OptSolver.add opt_solver [neg_inv_asn] in
-    let _ = Printf.printf "Opt Ctx:\n %s \n" @@ OptSolver.to_string opt_solver in
-    let model = match OptSolver.check opt_solver with
-      | SATISFIABLE -> fromJust (OptSolver.get_model opt_solver)
-      | _ -> failwith "Unsat!" in
-    let _ = OptSolver.pop opt_solver in
-    (*Printf.printf "Model: \n%s\n" (Model.to_string model);*)
-    let opers_mod = Array.map 
-                      (fun opere -> oper_of_expr @@ fromJust @@ 
-                                    Model.eval model opere true)
-                      opers in
-    let visees_mod = Array.map 
-                       (fun row -> Array.map 
-                          (fun visee -> is_true @@ fromJust @@
-                               Model.eval model visee true) row) 
-                       visees in
-    let exec = {opers=opers_mod; visees=visees_mod} in 
-    let _ = print_exec exec in 
-    let _ = Printf.printf "oper(e1) = %s\n" @@ Expr.to_string @@ 
-            fromJust @@ Model.eval model opere1 true in
-    let _ = Printf.printf "oper(e2) = %s\n" @@ Expr.to_string @@ 
-            fromJust @@ Model.eval model opere2 true in
-    let _ = Printf.printf "oper(e3) = %s\n" @@ Expr.to_string @@ 
-            fromJust @@ Model.eval model opere3 true in
-    let _ = Printf.printf "oper(e4) = %s\n" @@ Expr.to_string @@ 
-            fromJust @@ Model.eval model opere4 true in
-    let _ = Printf.printf "oper(e5) = %s\n" @@ Expr.to_string @@ 
-            fromJust @@ Model.eval model opere5 true in
-    let _ = Printf.printf "%s = %s\n"  (Expr.to_string visees.(0).(2))
-              (Expr.to_string @@ fromJust @@ 
-               Model.eval model visees.(0).(2) true) in
-    Printf.printf "Disposing...\n";
-    Gc.full_major ())
+    (*
+     *  Encode the given execution as a big conjunction.
+     *)
+    let encode_exec ({opers=opers_mod; visees=visees_mod}:exec) : Expr.expr = 
+      let oper_eqs = Array.to_list @@ Array.map2 
+                       (fun opere oper_tag -> 
+                          mk_eq ctx opere @@ expr_of_oper oper_tag)
+                       opers opers_mod in
+      let vis_preds = ref [] in
+      let _ =
+        for i=4 downto 1 do
+          for j=4 downto 1 do
+            let vis_pred = if visees_mod.(i).(j) 
+                           then visees.(i).(j)
+                           else mk_not ctx visees.(i).(j) in
+              vis_preds := vis_pred :: (!vis_preds)
+          done
+        done in
+      let conj = mk_and ctx @@ oper_eqs @ !vis_preds in
+      (* let _ = Printf.printf "Conjunction:\n %s \n" @@ Expr.to_string conj in
+       * *)
+        conj in
+    (*
+     * Main CEGAR loop.
+     *)
+    let rec cegar_loop iter = 
+      let _ = if iter >= 100 then raise Return else () in
+      let _ = OptSolver.push opt_solver in 
+      let _ = if iter mod 20 = 0 
+              then Printf.printf "Opt Ctx:\n %s \n" @@ 
+                    OptSolver.to_string opt_solver 
+              else () in
+      let model = match OptSolver.check opt_solver with
+        | SATISFIABLE -> fromJust (OptSolver.get_model opt_solver)
+        | UNSATISFIABLE -> (print_string "UNSAT\n"; raise Return)
+        | UNKNOWN -> (print_string "UNKNOWN\n"; raise Return) in
+      let _ = OptSolver.pop opt_solver in
+      (*Printf.printf "Model: \n%s\n" (Model.to_string model);*)
+      let opers_mod = Array.map 
+                        (fun opere -> oper_of_expr @@ fromJust @@ 
+                                      Model.eval model opere true)
+                        opers in
+      let visees_mod = Array.map 
+                         (fun row -> Array.map 
+                            (fun visee -> is_true @@ fromJust @@
+                                 Model.eval model visee true) row) 
+                         visees in
+      let exec = {opers=opers_mod; visees=visees_mod} in 
+      let _ = Printf.printf "%d. " iter in
+      let _ = (print_exec exec; flush_all ()) in 
+      let cex = encode_exec exec in
+      let _ = OptSolver.add opt_solver [mk_not ctx cex] in
+        cegar_loop (iter + 1) in
+    begin
+      try cegar_loop 1 with 
+        | Return -> ();
+      Printf.printf "Disposing...\n";
+      Gc.full_major ()
+    end)
+
