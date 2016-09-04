@@ -66,7 +66,7 @@ let _ =
     let sym = Symbol.mk_string ctx in
     let nullary_const cons = mk_app ctx 
                    (Constructor.get_constructor_decl cons) [] in
-    let s_true = mk_true ctx in
+    (* let s_true = mk_true ctx in *)
     let s_Int = Int.mk_sort ctx in
     let s_Bool = Bool.mk_sort ctx in
     let s_0 = Int.mk_numeral_i ctx 0 in
@@ -200,26 +200,23 @@ let _ =
                                       asn11; asn12] in
     let e_consts = Array.of_list @@ List.map nullary_const 
                                       [s_e1; s_e2; s_e3; s_e4; s_e5] in
-    let visees = Array.make 5 @@ Array.make 5 s_true in
+    let (visees : Expr.expr array array) = Array.mapi 
+                   (fun i row -> 
+                      Array.mapi
+                        (fun j x -> mk_app ctx s_vis 
+                                      [e_consts.(i); e_consts.(j)]) row) 
+                   (Array.make 5 @@ Array.make 5 0) in
+    let opere1 = mk_app ctx s_oper [nullary_const s_e1] in
+    let opere2 = mk_app ctx s_oper [nullary_const s_e2] in
+    let opers = Array.of_list [opere1; opere2; opere3; opere4; opere5] in
     let _ = 
       for i = 0 to 4 do
         for j = 0 to 4 do
           let str = "soft"^(string_of_int @@ i+1)^(string_of_int @@ j+1) in
-          let visee = mk_app ctx s_vis [e_consts.(i); e_consts.(j)] in
-          let _ = visees.(i).(j) <- visee in
-          let _ = Printf.printf "visees[%d,%d] <- %s\n" i j @@
-                  Expr.to_string visees.(i).(j) in
+          let visee = visees.(i).(j) in
           let soft_asn = mk_not ctx visee in
             ignore @@ OptSolver.add_soft opt_solver soft_asn "1" @@ sym str
         done
-      done in
-    let _ = Printf.printf "visees:\n" in
-    let _ = 
-      for i=0 to 4 do
-        for j=0 to 4 do
-          Printf.printf "%s\t" @@ Expr.to_string visees.(i).(j)
-        done;
-        Printf.printf "\n"
       done in
     let _ = OptSolver.push opt_solver in 
     (* (assert (not inv)) *)
@@ -231,9 +228,6 @@ let _ =
       | _ -> failwith "Unsat!" in
     let _ = OptSolver.pop opt_solver in
     (*Printf.printf "Model: \n%s\n" (Model.to_string model);*)
-    let opere1 = mk_app ctx s_oper [nullary_const s_e1] in
-    let opere2 = mk_app ctx s_oper [nullary_const s_e2] in
-    let opers = Array.of_list [opere1; opere2; opere3; opere4; opere5] in
     let opers_mod = Array.map 
                       (fun opere -> oper_of_expr @@ fromJust @@ 
                                     Model.eval model opere true)
