@@ -93,11 +93,11 @@ struct
     (struct
        include DiGraph
        let edge_attributes _ = []
-       let default_edge_attributes _ = [`Comment "vis"]
+       let default_edge_attributes _ = [`Label "vis"]
        let get_subgraph _ = None
-       let vertex_attributes _ = []
        let vertex_name (a,op_tag) = "e"^(string_of_int a)^"_"
               ^(string_of_oper op_tag)
+       let vertex_attributes v = [`Label (vertex_name v)]
        let default_vertex_attributes _ = []
        let graph_attributes _ = []
      end)
@@ -377,15 +377,20 @@ let _ =
     begin
       try cegar_loop 1 with 
         | Return -> ();
-      List.iter 
-        (fun cex -> 
+      List.iteri
+        (fun i cex -> 
            let g = graph_of_exec cex in
-           let fpath = "./Graphs/"^(freshDotFileName()) in
+           let fpath = "./Graphs/"^(string_of_int i)^".dot" in
            let out_channel = open_out_bin fpath in
            let _ = ExecGraph.output_graph out_channel g in
            let _ = close_out out_channel in
              ()) 
         @@ List.rev !cexs;
+      let fpath = "Graphs/"^(freshDotFileName()) in
+      ignore @@ Sys.command @@ Printf.sprintf 
+                       "gvpack -gu Graphs/[0-9]*.dot > %s" fpath ;
+      ignore @@ Sys.command "rm Graphs/[0-9]*.dot";
+      Printf.printf "Execution graph: %s\n" fpath;
       Printf.printf "Disposing...\n";
       Gc.full_major ()
     end)
