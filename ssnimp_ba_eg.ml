@@ -26,6 +26,7 @@ module Array :
 sig
   include module type of Array
   val map2 : ('a -> 'b -> 'c) -> 'a array -> 'b array -> 'c array
+  val map3 : ('a -> 'b -> 'c -> 'd) -> 'a array -> 'b array -> 'c array -> 'd array
 end = 
 struct
   include Array
@@ -33,6 +34,12 @@ struct
     let _ = if Array.length arr1 = Array.length arr2 then ()
             else failwith "Array.map2 exception" in
       Array.mapi (fun i e1 -> f e1 @@ arr2.(i)) arr1
+
+  let map3 f arr1 arr2 arr3 = 
+    let _ = if Array.length arr1 = Array.length arr2 &&
+               Array.length arr2 = Array.length arr3 then ()
+            else failwith "Array.map2 exception" in
+      Array.mapi (fun i e1 -> f e1 arr2.(i) arr3.(i)) arr1
 end
 
 let mkUidGen idBase =
@@ -156,7 +163,7 @@ let _ =
     let sym = Symbol.mk_string ctx in
     let nullary_const cons = mk_app ctx 
                    (Constructor.get_constructor_decl cons) [] in
-    (* let s_true = mk_true ctx in *)
+    let s_true = mk_true ctx in
     let s_Int = Int.mk_sort ctx in
     let s_Bool = Bool.mk_sort ctx in
     let s_0 = Int.mk_numeral_i ctx 0 in
@@ -198,17 +205,46 @@ let _ =
               (Quantifier.to_string asn1) in
     (* (declare-fun vis (Eff Eff) Bool) *)
     let s_vis = mk_func_decl_s ctx "vis" [s_Eff; s_Eff] s_Bool in
-    (* (assert (forall ((e Eff)) (not (vis e e)))) *)
-    let body = mk_not ctx @@ mk_app ctx s_vis [hd vars; hd vars] in
-    let asn2 = mk_forall ctx typs names body None [] [] None None in
-    let _ = Printf.printf "Quantifier asn2: %s\n" 
-              (Quantifier.to_string asn2) in
+    let s_hb = mk_func_decl_s ctx "hb" [s_Eff; s_Eff] s_Bool in
+    (* assert (forall ((a Eff) (b Eff)) (=> (vis a b) (hb a b)) *)
+    let typs = [s_Eff; s_Eff] in
+    let names = [sym "a"; sym "b"] in
+    let vars = [mk_bound ctx 1 s_Eff; mk_bound ctx 0 s_Eff] in 
+    let visab = mk_app ctx s_vis vars in
+    let hbab = mk_app ctx s_hb vars in
+    let body = mk_implies ctx visab hbab in
+    let asn2a = mk_forall ctx typs names body None [] [] None None in
+    let _ = Printf.printf "Quantifier asn2a: %s\n" 
+              (Quantifier.to_string asn2a) in
+    (* assert (forall ((a Eff) (b Eff) (c Eff)) 
+          (=> (and (hb a b) (hb b c)) (hb a c)) *)
+    let typs = [s_Eff; s_Eff; s_Eff] in
+    let names = [sym "a"; sym "b"; sym "c"] in
+    let vars = [mk_bound ctx 2 s_Eff; mk_bound ctx 1 s_Eff; 
+                mk_bound ctx 0 s_Eff] in 
+    let hbab = mk_app ctx s_hb [List.nth vars 0; List.nth vars 1] in
+    let hbbc = mk_app ctx s_hb [List.nth vars 1; List.nth vars 2] in
+    let hbac = mk_app ctx s_hb [List.nth vars 0; List.nth vars 2] in
+    let body = mk_implies ctx (mk_and ctx [hbab; hbbc]) hbac in
+    let asn2b = mk_forall ctx typs names body None [] [] None None in
+    let _ = Printf.printf "Quantifier asn2b: %s\n" 
+              (Quantifier.to_string asn2b) in
+    (* (assert (forall ((e Eff)) (not (hb e e)))) *)
+    let typs = [s_Eff] in
+    let names = [sym "e"] in
+    let vars = [mk_bound ctx 0 s_Eff] in 
+    let body = mk_not ctx @@ mk_app ctx s_hb [hd vars; hd vars] in
+    let asn2c = mk_forall ctx typs names body None [] [] None None in
+    let _ = Printf.printf "Quantifier asn2c: %s\n" 
+              (Quantifier.to_string asn2c) in
+    (* (assert (not (vis (e_i,e_j))) where i \in {3,4,5} and 
+    * j \in {1,2}) *)
     (* (declare-const a1 Int) (declare-const a2 Int) *)
     let s_a1 = Int.mk_const ctx @@ sym "a1" in
     let s_a2 = Int.mk_const ctx @@ sym "a2" in
     (* (assert (>= a1 0)) (assert (>= a2 0)) *)
-    let asn3 = mk_ge ctx s_a1 s_0 in
-    let asn4 = mk_ge ctx s_a2 s_0 in
+    let asn3 = mk_gt ctx s_a1 s_0 in
+    let asn4 = mk_gt ctx s_a2 s_0 in
     (* (define-fun sel ((a Eff)(n Eff)) Int
         (if (and (vis a n) (= (oper a) DP)) (rval a) 
           (if (and (vis a n) (= (oper a) WD)) (- 0 (rval a)) 0))) *)
@@ -289,7 +325,9 @@ let _ =
     (* Create opt_solver and  assert all hard contraints.*)
     let opt_solver = mk_opt ctx in
     let _ = OptSolver.add opt_solver [expr_of_quantifier asn1; 
-                                      expr_of_quantifier asn2; 
+                                      expr_of_quantifier asn2a; 
+                                      expr_of_quantifier asn2b; 
+                                      expr_of_quantifier asn2c; 
                                       asn3; asn4; 
                                       expr_of_quantifier asn5; 
                                       expr_of_quantifier asn6;
@@ -311,51 +349,71 @@ let _ =
     let _ = 
       for i = 0 to 4 do
         for j = 0 to 4 do
-          let str = "soft"^(string_of_int @@ i+1)^(string_of_int @@ j+1) in
           let visee = visees.(i).(j) in
           let soft_asn = mk_not ctx visee in
-            ignore @@ OptSolver.add_soft opt_solver soft_asn "1" @@ sym str
+            ignore @@ OptSolver.add_soft opt_solver soft_asn "1" @@ sym "soft"
         done
       done in
     (*
-     *  Encode the given execution as a big conjunction.
+     *  Encode (relevant part of) the given execution as a big conjunction.
      *)
     let encode_exec ({opers=opers_mod; visees=visees_mod}:exec) : Expr.expr = 
-      let oper_eqs = Array.to_list @@ Array.map2 
-                       (fun opere op_tag -> 
-                          mk_eq ctx opere @@ expr_of_oper op_tag)
-                       opers opers_mod in
+      let relevant = Array.make 5 false in
+      let _ = 
+        for i=0 to 4 do
+          for j=0 to 4 do
+              if visees_mod.(i).(j) then
+                begin
+                    relevant.(i) <- true;
+                    relevant.(j) <- true;
+                end
+              else
+                ()
+          done
+        done in
+      let oper_eqs = Array.to_list @@ Array.map3 
+                       (fun is_rel opere op_tag -> 
+                          if is_rel then mk_eq ctx opere @@ 
+                                         expr_of_oper op_tag
+                          else s_true)
+                       relevant opers opers_mod in
       let vis_preds = ref [] in
       let _ =
-        for i=4 downto 1 do
-          for j=4 downto 1 do
+        for i=4 downto 0 do
+          for j=4 downto 0 do
             let vis_pred = if visees_mod.(i).(j) 
-                           then visees.(i).(j)
-                           else mk_not ctx visees.(i).(j) in
-              vis_preds := vis_pred :: (!vis_preds)
+                           then Some visees.(i).(j)
+                           else if i!=j && (relevant.(i) || relevant.(j)) 
+                           then Some (mk_not ctx visees.(i).(j))
+                           else None in
+              match vis_pred with 
+                | None -> ()
+                | Some vis_pred -> vis_preds := vis_pred :: (!vis_preds)
           done
         done in
       let conj = mk_and ctx @@ oper_eqs @ !vis_preds in
-      (* let _ = Printf.printf "Conjunction:\n %s \n" @@ Expr.to_string conj in
-       * *)
+      let _ = Printf.printf "Conjunction:\n %s \n" @@ Expr.to_string conj in
         conj in
     (*
      * Main CEGAR loop.
      *)
     let cexs = ref [] in
     let rec cegar_loop iter = 
-      let _ = if iter > 10 then raise Return else () in
+      let _ = if iter > 20 then raise Return else () in
       let _ = OptSolver.push opt_solver in 
-      (* let _ = if iter mod 20 = 0 
-              then Printf.printf "Opt Ctx:\n %s \n" @@ 
-                    OptSolver.to_string opt_solver 
-              else () in *)
+      let _ = if iter = -1 then 
+                begin
+                  Printf.printf "*****  CONTEXT ******\n";
+                  print_string @@ OptSolver.to_string opt_solver;
+                  Printf.printf "\n*********************\n"
+                end
+              else () in
       let model = match OptSolver.check opt_solver with
         | SATISFIABLE -> fromJust (OptSolver.get_model opt_solver)
         | UNSATISFIABLE -> (print_string "UNSAT\n"; raise Return)
         | UNKNOWN -> (print_string "UNKNOWN\n"; raise Return) in
       let _ = OptSolver.pop opt_solver in
-      (*Printf.printf "Model: \n%s\n" (Model.to_string model);*)
+      (* Printf.printf "Model: \n%s\n" (Model.to_string model);*)
       let opers_mod = Array.map 
                         (fun opere -> oper_of_expr @@ fromJust @@ 
                                       Model.eval model opere true)
