@@ -6,6 +6,7 @@
 
 OCB_FLAGS = -use-ocamlfind #-tag bin_annot
 OCB = 		ocamlbuild $(OCB_FLAGS)
+FNAME = ssnimp_ba_eg2#ssnimp_mb_eg
 
 all: 		native byte 
 		mkdir -p Graphs
@@ -14,18 +15,18 @@ clean:
 		$(OCB) -clean
 
 native: 
-		$(OCB) ssnimp_ba_eg.native
+		$(OCB) $(FNAME).native
 
 byte:
-		$(OCB) ssnimp_ba_eg.byte
+		$(OCB) $(FNAME).byte
 
 profile:
-		$(OCB) -tag profile ssnimp_ba_eg.native
+		$(OCB) -tag profile $(FNAME).native
 
 debug:
-		$(OCB) -tag debug ssnimp_ba_eg.byte
+		$(OCB) -tag debug $(FNAME).byte
 
 test: 		native
-		./ssnimp_ba_eg.native "OCaml" "OCamlBuild" "users"
+		./$(FNAME).native 
 
 .PHONY: 	all clean byte native profile debug test

@@ -369,56 +369,80 @@ let mine_a_contract n_effs_S cexss ctrts =
   let asn5 = mk_forall ctx typs names body None [] [] None None in
   (* let _ = Printf.printf "Quantifier asn5: %s\n" 
             (Quantifier.to_string asn5) in *)
-  (* (define-fun getBalanceS ((n Eff)) Int
-        (+ 0 (sel e1 n) ... (sel eK n))) *)
-  let s_getBalance1 = mk_func_decl_s ctx "getBalance1" [s_Eff] s_Int in
+  (* We define a new type called State *)
+  let s_State = mk_uninterpreted_s ctx "State" in
+  (* State S0 is the common state present on all replicas *)
+  let s_S0 = Expr.mk_const_s ctx "S0" s_State in 
+  (* State S is the state before the execution of the withdraw operation *)
+  let s_S = Expr.mk_const_s ctx "S" s_State in 
+  (* State S1 is the state after the execution of the withdraw operation *)
+  let s_S1 = Expr.mk_const_s ctx "S1" s_State in 
+  (* Define getBalance as a function that, given a state and and effect,
+   * computes the balance w.r.t to the part of the state visible to that 
+   * effect *)
+  let s_getBalance = mk_func_decl_s ctx "getBalance" [s_State; s_Eff] s_Int in
+  (* For the common state S0, getBalance returns the same value for any effect.
+   * (assert (forall ((a Eff)(b Eff)) 
+   *      (= (getBalance S0 a) (getBalance S0 b)))) *)
+  let typs = [s_Eff; s_Eff] in
+  let names = [sym "a"; sym "b"] in
+  let [var_a; var_b] as vars = [mk_bound ctx 1 s_Eff; 
+                                mk_bound ctx 0 s_Eff] in 
+  let body = mk_eq ctx (mk_app ctx s_getBalance [s_S0; var_a]) 
+                       (mk_app ctx s_getBalance [s_S0; var_b]) in
+  let asn6 = mk_forall ctx typs names body None [] [] None None in
+  (* (assert (forall ((n Eff)) 
+  *     (= (getBalance S n) (+ (getBalance S0 n) (sel e1 n) .. (sel ek n)))))*)
   let typs = [s_Eff] in
   let names = [sym "n"] in
   let vars = [mk_bound ctx 0 s_Eff] in 
   let sels_S = List.map (fun s_ei -> 
                          mk_app ctx s_sel 
                            [nullary_const s_ei; hd vars]) effs_S in
-  let rhs = mk_add ctx @@ s_0::sels_S in
-  let lhs = mk_app ctx s_getBalance1 vars in
+  let gbS0n = mk_app ctx s_getBalance (s_S0::vars) in
+  let rhs = mk_add ctx @@ gbS0n::sels_S in
+  let lhs = mk_app ctx s_getBalance (s_S::vars) in
   let body = mk_eq ctx lhs rhs in
-  let asn6 = mk_forall ctx typs names body None [] [] None None in
+  let asn6a = mk_forall ctx typs names body None [] [] None None in
   (* let _ = Printf.printf "Quantifier asn6: %s\n" 
             (Quantifier.to_string asn6) in *)
-  (* (forall ((n Eff)) (=> (not (in_S n)) (>= (getBalance1 n) 0))) *)
+  (* Balance is initially non-negative *)
+  (* (forall ((n Eff)) (=> (not (in_S n)) (>= (getBalance S n) 0))) *)
   let typs = [s_Eff] in
   let names = [sym "n"] in
   let vars = [mk_bound ctx 0 s_Eff] in 
   let body = mk_implies ctx 
                (mk_not ctx (mk_app ctx s_in_S vars))
-               (mk_ge ctx (mk_app ctx s_getBalance1 vars) s_0) in
-  let asn6a = mk_forall ctx typs names body None [] [] None None in
+               (mk_ge ctx (mk_app ctx s_getBalance (s_S::vars)) s_0) in
+  let asn6b = mk_forall ctx typs names body None [] [] None None in
   (* let _ = Printf.printf "Quantifier asn6a: %s\n" 
             (Quantifier.to_string asn6a) in *)
-  (* (define-fun getBalance2 ((n Eff)) Int
-        (+ 0 (sel e1 n) .. (sel ek n) (sel e n) (sel eb n))) *)
-  let s_getBalance2 = mk_func_decl_s ctx "getBalance2" [s_Eff] s_Int in
+  (* (assert (forall ((n Eff)) 
+   *    (= (getBalance S1 n) (+ (getBalance S0 n) (sel e1 n) ...
+   *                            (sel ek n) (sel e n) (sel eb n))))) *)
   let typs = [s_Eff] in
   let names = [sym "n"] in
   let vars = [mk_bound ctx 0 s_Eff] in 
   let s_sele = mk_app ctx s_sel [nullary_const s_e; hd vars] in
   let s_seleb = mk_app ctx s_sel [nullary_const s_eb; hd vars] in
-  let rhs = mk_add ctx @@ s_0::s_sele::s_seleb::sels_S in
-  let lhs = mk_app ctx s_getBalance2 vars in
+  let gbS0n = mk_app ctx s_getBalance (s_S0::vars) in
+  let rhs = mk_add ctx @@ gbS0n::s_sele::s_seleb::sels_S in
+  let lhs = mk_app ctx s_getBalance (s_S1::vars) in
   let body = mk_eq ctx lhs rhs in
-  let asn6b = mk_forall ctx typs names body None [] [] None None in
+  let asn6c = mk_forall ctx typs names body None [] [] None None in
   (* let _ = Printf.printf "Quantifier asn6b: %s\n" 
             (Quantifier.to_string asn6b) in *)
-  (* (assert (= (oper eb) GB)) (assert (= (rval eb) (getBalance2 eb))) *)
+  (* (assert (= (oper eb) GB)) (assert (= (rval eb) (getBalance S1 eb))) *)
   let opereb = mk_app ctx s_oper [nullary_const s_eb] in
   let asn7 = mk_eq ctx opereb @@ nullary_const s_GB in
   let rvaleb = mk_app ctx s_rval [nullary_const s_eb] in
-  let asn8 = mk_eq ctx rvaleb @@ mk_app ctx s_getBalance2 
-                                   [nullary_const s_eb] in
-  (* (assert (if (>= (getBalance1 e) a1) 
+  let asn8 = mk_eq ctx rvaleb @@ mk_app ctx s_getBalance
+                                   [s_S1; nullary_const s_eb] in
+  (* (assert (if (>= (getBalance S e) a1) 
                 (and (= (oper e) WD) (= (rval e) a1)) 
                 (and (= (oper e) NOP))))*)
-  let grd = mk_ge ctx (mk_app ctx s_getBalance1
-                         [nullary_const s_e]) s_a1 in
+  let grd = mk_ge ctx (mk_app ctx s_getBalance
+                         [s_S; nullary_const s_e]) s_a1 in
   let opere = mk_app ctx s_oper [nullary_const s_e] in
   let rvale = mk_app ctx s_rval [nullary_const s_e] in
   let thene = mk_and ctx [mk_eq ctx opere @@ nullary_const s_WD;
@@ -444,6 +468,7 @@ let mine_a_contract n_effs_S cexss ctrts =
                                     expr_of_quantifier asn6;
                                     expr_of_quantifier asn6a;
                                     expr_of_quantifier asn6b;
+                                    expr_of_quantifier asn6c;
                                     asn7; asn8; asn9; asn12] in
   (* assert any existing contracts *)
   let _ = Array.iteri 
@@ -483,7 +508,7 @@ let mine_a_contract n_effs_S cexss ctrts =
    * Main CEGAR loop.
    *)
   let rec cegar_loop (cexs : exec list) iter = 
-    let _ = if iter > 10 then raise (Return cexs) else () in
+    (* let _ = if iter > 10 then raise (Return cexs) else () in *)
     (* Assert the last conjunct inferred *)
     let _ = match cexs with
       | [] -> () 
@@ -544,15 +569,17 @@ let _ =
   if not (Log.open_ "z3.log") then
     failwith "Log couldn't be opened."
   else
-    let k = 3 in
+    let k = 100 in
     let cexss = Array.make (k+1) [] in 
     let ctrts = Array.make (k+1) "" in 
       begin
         for i = 1 to k do
           let cexs = mine_a_contract i cexss ctrts in
-            cexss.(i) <- cexs
+            cexss.(i) <- cexs;
+          flush_all ();
         done;
         print_string "Successful! Contracts inferred:\n";
-        Array.iter (fun s -> print_string @@ s^"\n") ctrts;
+        Array.iteri 
+          (fun i s -> if not (s="") then Printf.printf "%d. %s\n" i s) ctrts;
       end
 
