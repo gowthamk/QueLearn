@@ -542,6 +542,7 @@ let mine_a_contract n_effs_S cexss ctrts =
    *)
   let opt_solver = mk_opt ctx in
   let _ = OptSolver.add opt_solver @@ List.rev !asns in
+    (*
   let _ = 
     begin
       Printf.printf "*****  CONTEXT ******\n";
@@ -553,7 +554,7 @@ let mine_a_contract n_effs_S cexss ctrts =
     | UNSATISFIABLE -> (failwith "UNSAT\n")
     | UNKNOWN -> (failwith "UNKNOWN\n") in
   let _ = Printf.printf "Model: \n%s\n" (Model.to_string model) in ()
-(*
+   *)
   (* assert any existing contracts *)
   let _ = Array.iteri 
             (fun i cexs -> if List.length cexs = 0 then () else
@@ -648,14 +649,11 @@ let mine_a_contract n_effs_S cexss ctrts =
     Gc.full_major ();
     cexs
   end
-*)
 
 let _ = 
   if not (Log.open_ "z3.log") then
     failwith "Log couldn't be opened."
   else
-    mine_a_contract 1 (Array.make 1 []) (Array.make 1 [])
-    (*
     let k = 3 in
     let cexss = Array.make (k+1) [] in 
     let ctrts = Array.make (k+1) "" in 
@@ -668,5 +666,4 @@ let _ =
         Array.iteri 
           (fun i s -> if not (s="") then Printf.printf "%d. %s\n" i s) ctrts;
       end
-     *)
 
