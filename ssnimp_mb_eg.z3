@@ -37,18 +37,37 @@
 (declare-const GET_USERLINE Fn)
 (assert (= (fn eb0) GET_USERLINE))
 (assert (= (fn eb1) GET_USERLINE))
-; Define getTweet1
-(declare-fun getTweet1 (Eff Id) Stringe)
-; Define getTweetsInUL1
-(declare-fun getTweetsInUL1 (Eff Id Id) Bool)
-; Assert invariant in pre-state
+; Define State
+(declare-sort State)
+(declare-const S0 State)
+(declare-const S State)
+(declare-const S1 State)
+; Define getTweet as a function that, given a state, a tweetId, and 
+; an effect, returns the tweet stringe corresponding to the tweetId,
+; the NewTweet effect is visible, else returns none stringe.
+(declare-fun getTweet (State Eff Id) Stringe)
+; Define getTweetsInUL as a function that, given a state, a userId, a
+; tweetId, and an effect, computes if the tweet corresponding to the
+; tweetId is available (visible to the effect) to be included in the UL. 
+(declare-fun getTweetsInUL (State Eff Id Id) Bool)
+; State S0 is the common prefix, so all effects witness the same
+; result w.r.t S0.
+(assert (forall ((n1 Eff)(n2 Eff)(id Id)) 
+      (= (getTweet S0 n1 id) (getTweet S0 n2 id))))
+(assert (forall ((n1 Eff)(n2 Eff)(uid Id)(tid Id)) 
+      (= (getTweetsInUL S0 n1 uid tid) (getTweetsInUL S0 n2 uid tid))))
+; State S, the pre-state, is same as S0, since k=0.
+(assert (= S S0))
+; Assert invariant in the pre-state
 (assert (forall ((uid Id)(tid Id)) 
-    (=> (getTweetsInUL1 eb0 uid tid)
-        (not (= (getTweet1 eb1 tid) none_stringe)))))
+    (=> (getTweetsInUL S eb0 uid tid)
+        (not (= (getTweet S eb1 tid) none_stringe)))))
 ; Execute newTweet txn
 (declare-const ADD_NEW_TWEET Fn)
 (declare-const uid0 Id)
+; Define a string that is not none_stringe
 (declare-const stringe0 Stringe)
+(assert (not (= stringe0 none_stringe)))
 (declare-const tid0 Id)
 (assert (= (oper ea0) (NT uid0 stringe0)))
 (assert (= (objid ea0) tid0))
@@ -62,31 +81,39 @@
 (assert (= (objid ea2) tlid0))
 (assert (= (fn ea2) ADD_NEW_TWEET))
 (assert (and (so ea0 ea1) (so ea1 ea2)))
-; Define getTweet2
-(declare-fun getTweet2 (Eff Id) Stringe)
+; S1 is S U {ea0,ea1,ea2}.
+; Define getTweet under S1.
 (assert (forall ((a Eff) (b Id))
   (ite (and (vis ea0 a) (is-NT (oper ea0)) (= (objid ea0) b))
-       (= (getTweet2 a b) (content (oper ea0)))
+       (= (getTweet S1 a b) (content (oper ea0)))
        (ite (and (vis ea1 a) (is-NT (oper ea1)) (= (objid ea1) b))
-            (= (getTweet2 a b) (content (oper ea1)))
+            (= (getTweet S1 a b) (content (oper ea1)))
             (ite (and (vis ea2 a) (is-NT (oper ea2)) (= (objid ea2) b))
-                 (= (getTweet2 a b) (content (oper ea2)))
-                 (= (getTweet2 a b) (getTweet1 a b)))))))
-; Define getTweetsInUL2
-(declare-fun getTweetsInUL2 (Eff Id Id) Bool)
+                 (= (getTweet S1 a b) (content (oper ea2)))
+                 (= (getTweet S1 a b) (getTweet S a b)))))))
+; Define getTweetsInUL under S1.
 (assert (forall ((a Eff) (b Id) (c Id)) 
-    (= (getTweetsInUL2 a b c)
+    (= (getTweetsInUL S1 a b c)
        (or (and (vis ea0 a) (is-NTUL (oper ea0)) 
                 (= (objid ea0) b) (= (tweetIdB (oper ea0)) c))
            (and (vis ea1 a) (is-NTUL (oper ea1)) 
                 (= (objid ea1) b) (= (tweetIdB (oper ea1)) c))     
            (and (vis ea2 a) (is-NTUL (oper ea2)) 
                 (= (objid ea2) b) (= (tweetIdB (oper ea2)) c))
-           (getTweetsInUL1 a b c)))))
+           (getTweetsInUL S a b c)))))
 (declare-const Inv Bool)
 (assert (= Inv (forall ((uid Id)(tid Id)) 
-    (=> (getTweetsInUL2 eb0 uid tid)
-        (not (= (getTweet2 eb1 tid) none_stringe))))))
+    (=> (getTweetsInUL S1 eb0 uid tid)
+        (not (= (getTweet S1 eb1 tid) none_stringe))))))
 (assert (not Inv))
+(assert-soft (not (vis ea0 ea1)) :weight 1 :id soft)
+(assert-soft (not (vis ea0 ea2)) :weight 1 :id soft)
+(assert-soft (not (vis ea1 ea2)) :weight 1 :id soft)
+(assert-soft (not (vis ea0 eb0)) :weight 1 :id soft)
+(assert-soft (not (vis ea0 eb1)) :weight 1 :id soft)
+(assert-soft (not (vis ea1 eb0)) :weight 1 :id soft)
+(assert-soft (not (vis ea1 eb1)) :weight 1 :id soft)
+(assert-soft (not (vis ea2 eb0)) :weight 1 :id soft)
+(assert-soft (not (vis ea2 eb1)) :weight 1 :id soft)
 (check-sat)
 (get-model)
