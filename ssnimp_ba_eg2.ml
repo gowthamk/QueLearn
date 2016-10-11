@@ -569,7 +569,7 @@ let _ =
   if not (Log.open_ "z3.log") then
     failwith "Log couldn't be opened."
   else
-    let k = 100 in
+    let k = 3 in
     let cexss = Array.make (k+1) [] in 
     let ctrts = Array.make (k+1) "" in 
       begin

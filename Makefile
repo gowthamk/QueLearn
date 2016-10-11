@@ -6,7 +6,7 @@
 
 OCB_FLAGS = -use-ocamlfind #-tag bin_annot
 OCB = 		ocamlbuild $(OCB_FLAGS)
-FNAME = ssnimp_ba_eg2#ssnimp_mb_eg
+FNAME = ssnimp_mb_eg#ssnimp_ba_eg2#bug
 
 all: 		native byte 
 		mkdir -p Graphs

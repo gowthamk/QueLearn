@@ -42,6 +42,20 @@ struct
       Array.mapi (fun i e1 -> f e1 arr2.(i) arr3.(i)) arr1
 end
 
+module List:
+sig
+  include module type of List
+  val keep_some : 'a option list -> 'a list
+end = 
+struct
+  include List
+  let rec keep_some l = match l with
+    | [] -> []
+    | (Some x)::xs -> x::(keep_some xs)
+    | None::xs -> keep_some xs
+end
+
+
 let mkUidGen idBase =
   let count = ref 0 in
     fun () -> 
@@ -57,7 +71,8 @@ let fromJust = function
   | None -> failwith "Got None when Some was expected."
 
 type oper = GB | WD | DP | NOP
-type exec = {opers: oper array; visees: bool array array}
+type exec = {consts: Expr.expr array; rvals: Expr.expr array; 
+             opers: oper array; visees: bool array array}
 exception Return 
 
 (* Returns [f(i), f(i-1), ... , f(1)]*)
@@ -71,7 +86,6 @@ let oper_of_expr expr = match Expr.to_string expr with
 
 let string_of_oper = function GB -> "GB" 
   | WD -> "WD" | DP -> "DP" | NOP -> "NOP"
-
 
 (* 
  * Execution graphs
@@ -138,10 +152,14 @@ let graph_of_exec {opers=opers_mod; visees=visees_mod} =
       g
     end
 
-let print_exec {opers; visees} = 
+let print_exec {consts; rvals; opers; visees} = 
   begin
+    for i=0 to 1 do
+      Printf.printf "%s," (Expr.to_string consts.(i))
+    done;
     for i = 0 to 4 do
-      Printf.printf "%s," (string_of_oper opers.(i)) 
+      Printf.printf "%s(%s)," (string_of_oper opers.(i))
+          (Expr.to_string rvals.(i))
     done;
     for i=0 to 4 do
       for j=0 to 4 do
@@ -163,7 +181,7 @@ let _ =
     let sym = Symbol.mk_string ctx in
     let nullary_const cons = mk_app ctx 
                    (Constructor.get_constructor_decl cons) [] in
-    let s_true = mk_true ctx in
+    (* let s_true = mk_true ctx in *)
     let s_Int = Int.mk_sort ctx in
     let s_Bool = Bool.mk_sort ctx in
     let s_0 = Int.mk_numeral_i ctx 0 in
@@ -320,9 +338,10 @@ let _ =
     (* (declare-const inv Bool) (assert (= inv (>= (rval e3) 0))) *)
     let s_inv = Boolean.mk_const ctx @@ sym "inv" in
     let asn12 = mk_eq ctx s_inv @@ mk_ge ctx rvale3 s_0 in
-    (* (assert (not inv)) *)
-    let neg_inv_asn = mk_not ctx s_inv in
-    (* Create opt_solver and  assert all hard contraints.*)
+    (* 
+     * Create opt_solver and  assert all the constraints generated from symbolic
+     * execution.
+     *)
     let opt_solver = mk_opt ctx in
     let _ = OptSolver.add opt_solver [expr_of_quantifier asn1; 
                                       expr_of_quantifier asn2a; 
@@ -332,8 +351,7 @@ let _ =
                                       expr_of_quantifier asn5; 
                                       expr_of_quantifier asn6;
                                       asn7; asn8; asn9; asn10; 
-                                      asn11; asn12;
-                                      neg_inv_asn] in
+                                      asn11; asn12] in
     let e_consts = Array.of_list @@ List.map nullary_const 
                                       [s_e1; s_e2; s_e3; s_e4; s_e5] in
     let (visees : Expr.expr array array) = Array.mapi 
@@ -344,16 +362,10 @@ let _ =
                    (Array.make 5 @@ Array.make 5 0) in
     let opere1 = mk_app ctx s_oper [nullary_const s_e1] in
     let opere2 = mk_app ctx s_oper [nullary_const s_e2] in
+    let rvale1 = mk_app ctx s_rval [nullary_const s_e1] in
+    let rvale2 = mk_app ctx s_rval[nullary_const s_e2] in
     let opers = Array.of_list [opere1; opere2; opere3; opere4; opere5] in
-    (* assert soft constraints *)
-    let _ = 
-      for i = 0 to 4 do
-        for j = 0 to 4 do
-          let visee = visees.(i).(j) in
-          let soft_asn = mk_not ctx visee in
-            ignore @@ OptSolver.add_soft opt_solver soft_asn "1" @@ sym "soft"
-        done
-      done in
+    let rvals = Array.of_list [rvale1; rvale2; rvale3; rvale4; rvale5] in
     (*
      *  Encode (relevant part of) the given execution as a big conjunction.
      *)
@@ -371,11 +383,11 @@ let _ =
                 ()
           done
         done in
-      let oper_eqs = Array.to_list @@ Array.map3 
+      let oper_eqs = List.keep_some @@ Array.to_list @@ Array.map3 
                        (fun is_rel opere op_tag -> 
-                          if is_rel then mk_eq ctx opere @@ 
-                                         expr_of_oper op_tag
-                          else s_true)
+                          if is_rel then Some (mk_eq ctx opere @@ 
+                                         expr_of_oper op_tag)
+                          else None)
                        relevant opers opers_mod in
       let vis_preds = ref [] in
       let _ =
@@ -383,8 +395,8 @@ let _ =
           for j=4 downto 0 do
             let vis_pred = if visees_mod.(i).(j) 
                            then Some visees.(i).(j)
-                           else if i!=j && (relevant.(i) || relevant.(j)) 
-                           then Some (mk_not ctx visees.(i).(j))
+                           (*else if i!=j && (relevant.(i) || relevant.(j)) 
+                           then Some (mk_not ctx visees.(i).(j))*)
                            else None in
               match vis_pred with 
                 | None -> ()
@@ -399,9 +411,25 @@ let _ =
      *)
     let cexs = ref [] in
     let rec cegar_loop iter = 
-      let _ = if iter > 20 then raise Return else () in
+      let _ = if iter > 1 then raise Return else () in
+      (*
+       * PUSH and assert all constraints relevant to generate a new counter
+       * example.
+       *)
       let _ = OptSolver.push opt_solver in 
-      let _ = if iter = -1 then 
+      (* (assert (not inv)) *)
+      let neg_inv_asn = mk_not ctx s_inv in
+      let _ = OptSolver.add opt_solver [neg_inv_asn] in
+      (* assert soft constraints *)
+      let _ = 
+        for i = 0 to 4 do
+          for j = 0 to 4 do
+            let visee = visees.(i).(j) in
+            let soft_asn = mk_not ctx visee in
+              ignore @@ OptSolver.add_soft opt_solver soft_asn "1" @@ sym "soft"
+          done
+        done in
+      let _ = if iter = 1 then 
                 begin
                   Printf.printf "*****  CONTEXT ******\n";
                   print_string @@ OptSolver.to_string opt_solver;
@@ -412,8 +440,18 @@ let _ =
         | SATISFIABLE -> fromJust (OptSolver.get_model opt_solver)
         | UNSATISFIABLE -> (print_string "UNSAT\n"; raise Return)
         | UNKNOWN -> (print_string "UNKNOWN\n"; raise Return) in
-      let _ = OptSolver.pop opt_solver in
       (* Printf.printf "Model: \n%s\n" (Model.to_string model);*)
+      let _ = OptSolver.pop opt_solver in
+      (* 
+       * POP. 
+       * Read counter example.
+       *)
+      let consts_mod = Array.of_list @@ 
+                          List.map (fun x -> 
+                                       fromJust @@ Model.eval model x true)
+                         [s_a1; s_a2] in
+      let rvals_mod = Array.map (fun x -> 
+                           fromJust @@ Model.eval model x true) rvals in
       let opers_mod = Array.map 
                         (fun opere -> oper_of_expr @@ fromJust @@ 
                                       Model.eval model opere true)
@@ -423,7 +461,31 @@ let _ =
                             (fun visee -> is_true @@ fromJust @@
                                  Model.eval model visee true) row) 
                          visees in
-      let cex = {opers=opers_mod; visees=visees_mod} in 
+      let cex = {consts=consts_mod; rvals=rvals_mod; 
+                 opers=opers_mod; visees=visees_mod} in 
+      let 
+      (* 
+       * Contract inference.
+       * PUSH. 
+       *)
+      let _ = OptSolver.push opt_solver in
+      (* 
+       * First, concretize the test case by asserting the values of constants,
+       * and pre-state effects.
+       *)
+      let asn13 = mk_eq ctx s_a1 @@ List.nth 0 consts_mod in
+      let asn14 = mk_eq ctx s_a2 @@ List.nth 1 consts_mod in
+      let asn15 = mk_eq ctx opere1 @@ fromJust @@ 
+                                      Model.eval model opere1 in
+      let asn16 = mk_eq ctx rvale1 @@ List.nth 0 rvals_mod in
+      let asn17 = mk_eq ctx opere2 @@ fromJust @@ 
+                                      Model.eval model opere2 in
+      let asn18 = mk_eq ctx rvale1 @@ List.nth 1 rvals_mod in
+      let _ = OptSolver.add opt_solver [asn13; asn14; asn15; asn16; 
+                                        asn17; asn18] in
+      let 
+      let _ = OptSolver.pop opt_solver in 
+      let 
         begin
           cexs:= cex :: !cexs; 
           Printf.printf "%d. " iter; 
